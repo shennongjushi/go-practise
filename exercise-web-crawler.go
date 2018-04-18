@@ -20,12 +20,13 @@ type Fetcher interface {
 
 // Crawl uses fetcher to recursively crawl
 // pages starting with url, to a maximum of depth.
-func Crawl(url string, depth int, fetcher Fetcher, ret chan string) {
+func Crawl(url string, depth int, fetcher Fetcher, done chan int) {
 	// TODO: Fetch URLs in parallel.
 	// TODO: Don't fetch the same URL twice.
 	// This implementation doesn't do either:
-	defer close(ret)
+	defer close(done)
 	if depth <= 0 {
+		done <- 1
 		return
 	}
 	
@@ -33,8 +34,8 @@ func Crawl(url string, depth int, fetcher Fetcher, ret chan string) {
 	if c.v[url] == false {
 		c.v[url] = true
 	} else {
-		//fmt.Printf("duplicate %s\n", url)
 		c.mux.Unlock()
+		done <- 1
 		return
 	}
 	c.mux.Unlock()
@@ -42,29 +43,27 @@ func Crawl(url string, depth int, fetcher Fetcher, ret chan string) {
 	body, urls, err := fetcher.Fetch(url)
 	if err != nil {
 		fmt.Println(err)
+		done <- 1
 		return
 	}
-	ret <- fmt.Sprintf("found: %s %q\n", url, body)
+	fmt.Printf("found: %s %q\n", url, body)
 	
-	result := make([]chan string, len(urls))
+	childDone := make([]chan int, len(urls))
 	for i, u := range urls {
-		result[i] = make(chan string)
-		go Crawl(u, depth-1, fetcher, result[i])
+		childDone[i] = make(chan int)
+		go Crawl(u, depth-1, fetcher, childDone[i])
 	}
-	for i := range result {
-		for s := range result[i] {
-			ret <- s
-		}
+	for i := range childDone {
+		<- childDone[i]
 	}
+	done <- 1
 	return
 }
 
 func main() {
-	result := make(chan string)
-	go Crawl("https://golang.org/", 4, fetcher, result)
-	for s := range result {
-		fmt.Println(s)
-	}
+	done := make(chan int)
+	go Crawl("https://golang.org/", 4, fetcher, done)
+	<- done
 }
 
 // fakeFetcher is Fetcher that returns canned results.
